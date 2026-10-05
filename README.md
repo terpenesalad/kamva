@@ -1,6 +1,6 @@
 # Kamva
 
-Kamva is a desktop editor for graphics, photos, video and audio. You lay out designs on a canvas, edit photos, build multi-page presentations and short videos, and export to every common format. It runs fully offline on Windows, macOS and Linux.
+Kamva is a desktop editor for graphics, photos, video and audio. You lay out designs on a canvas, edit photos, build multi-page presentations and short videos, and export to every common format. It runs fully offline. Windows and Linux builds are published; macOS can be built from source but its CI build is still being worked on.
 
 ![Kamva editor](docs/editor.png)
 
