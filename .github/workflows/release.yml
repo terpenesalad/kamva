@@ -20,13 +20,18 @@ jobs:
           - os: windows-latest
             target: --win --x64
             ffmpeg: win32 x64
+            optional: false
           - os: macos-latest
             target: --mac
             ffmpeg: darwin arm64
+            optional: true
           - os: ubuntu-latest
             target: --linux
             ffmpeg: linux x64
+            optional: true
     runs-on: ${{ matrix.os }}
+    # Windows is the primary target; macOS/Linux builds never block a release
+    continue-on-error: ${{ matrix.optional }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,7 +50,9 @@ jobs:
           path: |
             release/*.exe
             release/*.dmg
+            release/*-mac.zip
             release/*.AppImage
+          if-no-files-found: ignore
 
   release:
     needs: build

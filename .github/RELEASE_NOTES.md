@@ -4,7 +4,7 @@ First release of Kamva, a desktop editor for designs, photos, video and audio.
 
 - **Kamva-Setup-1.0.0.exe**: installer with Start menu and desktop shortcuts; opens `.kamva` files
 - **Kamva-1.0.0-portable.exe**: single file, no install needed
-- macOS (.dmg, Apple silicon) and Linux (.AppImage) builds are attached too
+- macOS (Apple silicon, .zip) and Linux (.AppImage) builds are attached when those builds succeed
 
 The builds aren't code-signed. If SmartScreen shows "Windows protected your PC", choose **More info → Run anyway**.
 

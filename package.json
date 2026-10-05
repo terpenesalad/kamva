@@ -161,7 +161,7 @@
       "icon": "build/icon.png",
       "category": "public.app-category.graphics-design",
       "target": [
-        "dmg"
+        "zip"
       ],
       "extraResources": [
         {
@@ -173,7 +173,8 @@
             "README.txt"
           ]
         }
-      ]
+      ],
+      "artifactName": "Kamva-${version}-mac.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
@@ -191,7 +192,8 @@
             "README.txt"
           ]
         }
-      ]
+      ],
+      "artifactName": "Kamva-${version}.${ext}"
     }
   }
 }
