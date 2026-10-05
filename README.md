@@ -86,7 +86,7 @@ npm run fetch:ffmpeg -- win32 x64   # download FFmpeg for the target platform
 npm run dist:win     # Windows installer + portable exe in release/
 ```
 
-Building the Windows installer on Linux needs Wine with 32-bit support. Pushing a `v*` tag runs the GitHub Actions workflow, which builds Windows, macOS and Linux and attaches the files to a release.
+Building the Windows installer on Linux needs Wine with 32-bit support. Pushing a `v*` tag, or pushing to the `release` branch, runs the GitHub Actions workflow, which builds Windows, macOS and Linux and attaches the files to a release.
 
 ### Project layout
 
