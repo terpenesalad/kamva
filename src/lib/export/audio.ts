@@ -3,6 +3,35 @@
 import type { Design } from '../../types';
 import { getAudioBuffer } from '../assets';
 import { pageStartTime, totalDuration } from '../../store/editor';
+import { elementSpan, videoMotionEnd } from '../timing';
+import { platform, isDesktop } from '../platform';
+
+const stretchCache = new Map<string, Promise<AudioBuffer | null>>();
+
+/**
+ * The [from, to] part of `buf`, time-stretched by `speed` without changing the
+ * pitch (ffmpeg atempo, desktop only). Null when that isn't available.
+ */
+async function stretchedSegment(buf: AudioBuffer, from: number, to: number, speed: number, sampleRate: number): Promise<AudioBuffer | null> {
+  if (!isDesktop) return null;
+  const info = await platform.appInfo();
+  if (!info.ffmpeg) return null;
+  const key = [buf.length, buf.sampleRate, from.toFixed(3), to.toFixed(3), speed.toFixed(4)].join('|');
+  let p = stretchCache.get(key);
+  if (!p) {
+    p = (async () => {
+      const a = Math.floor(from * buf.sampleRate);
+      const b = Math.min(buf.length, Math.ceil(to * buf.sampleRate));
+      const seg = new AudioBuffer({ length: Math.max(1, b - a), numberOfChannels: buf.numberOfChannels, sampleRate: buf.sampleRate });
+      for (let c = 0; c < buf.numberOfChannels; c++) seg.copyToChannel(buf.getChannelData(c).subarray(a, b), c);
+      const out = await platform.transcode(audioBufferToWav(seg), 'wav', 'tempo', { tempo: speed });
+      const dec = new OfflineAudioContext(buf.numberOfChannels, 1, sampleRate);
+      return dec.decodeAudioData(out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer);
+    })().catch(() => null);
+    stretchCache.set(key, p);
+  }
+  return p;
+}
 
 /** Cheap check (no decoding): does anything in the design make a sound? */
 export function hasSoundSources(design: Design): boolean {
@@ -71,10 +100,11 @@ export async function mixSoundtrack(design: Design, sampleRate = 48000): Promise
   }
 
   // --- sound of video elements -------------------------------------------
+  // Same rules as the editor preview: the sound starts with the element, stops
+  // where the clip ends (or loops to the element end), with volume and fades.
   for (const page of design.pages) {
     if (page.hidden) continue;
     const pageStart = pageStartTime(design, page.id);
-    const pageEnd = pageStart + page.duration;
     for (const el of page.elements) {
       if (el.type !== 'video' || !el.assetId || el.muted || el.hidden || !(el.volume > 0)) continue;
       const buf = await getAudioBuffer(el.assetId);
@@ -83,26 +113,57 @@ export async function mixSoundtrack(design: Design, sampleRate = 48000): Promise
       const trimStart = Math.max(0, Math.min(el.trimStart || 0, buf.duration));
       const trimEnd = Math.max(trimStart, Math.min(el.trimEnd ?? buf.duration, buf.duration));
       if (trimEnd - trimStart < 0.01) continue;
-      const elStart = pageStart + Math.max(0, el.timing?.start ?? 0);
-      const elEnd = Math.min(pageEnd, pageStart + (el.timing?.end ?? page.duration), total);
-      if (elEnd - elStart < 0.001) continue;
+      const span = elementSpan(el, page.duration);
+      const elStart = pageStart + span.start;
+      const soundEnd = Math.min(pageStart + videoMotionEnd(el, buf.duration, page.duration), total);
+      if (soundEnd - elStart < 0.001) continue;
+
+      // speed changes keep the pitch when ffmpeg can stretch the audio
+      let source: AudioBuffer = buf;
+      let offset = trimStart;
+      let loopStart = trimStart;
+      let loopEnd = trimEnd;
+      let rate = speed;
+      if (Math.abs(speed - 1) > 0.001) {
+        const stretched = await stretchedSegment(buf, trimStart, trimEnd, speed, sampleRate).catch(() => null);
+        if (stretched) {
+          source = stretched;
+          offset = 0;
+          loopStart = 0;
+          loopEnd = stretched.duration;
+          rate = 1;
+        }
+      }
 
       const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.playbackRate.value = speed;
-      let stopAt = elEnd;
+      src.buffer = source;
+      src.playbackRate.value = rate;
       if (el.loop) {
         src.loop = true;
-        src.loopStart = trimStart;
-        src.loopEnd = trimEnd;
-      } else {
-        stopAt = Math.min(elEnd, elStart + (trimEnd - trimStart) / speed);
+        src.loopStart = loopStart;
+        src.loopEnd = loopEnd;
       }
       const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, el.volume);
+      const vol = Math.max(0, el.volume);
+      const len = soundEnd - elStart;
+      let fi = Math.max(0, el.fadeIn || 0);
+      let fo = Math.max(0, el.fadeOut || 0);
+      if (fi + fo > len) {
+        const k = len / (fi + fo);
+        fi *= k;
+        fo *= k;
+      }
+      const g = gain.gain;
+      g.setValueAtTime(fi > 0 ? 0 : vol, 0);
+      g.setValueAtTime(fi > 0 ? 0 : vol, elStart);
+      if (fi > 0) g.linearRampToValueAtTime(vol, elStart + fi);
+      if (fo > 0) {
+        g.setValueAtTime(vol, Math.max(elStart + fi, soundEnd - fo));
+        g.linearRampToValueAtTime(0, soundEnd);
+      }
       src.connect(gain).connect(ctx.destination);
-      src.start(elStart, trimStart);
-      src.stop(stopAt);
+      src.start(elStart, offset);
+      src.stop(soundEnd);
       sources++;
     }
   }

@@ -35,8 +35,11 @@ The builds aren't code-signed yet. Windows SmartScreen may show "Windows protect
 - Corner rounding, borders, shadows, blend modes, transparency and flip.
 
 ### Video and audio
-- A timeline with page durations, 13 page transitions, and enter/exit/loop animations for every element.
-- Video clips with trim, speed, volume, mute and loop. Video can also be used as a page background.
+- A timeline with a track for every element on the page: drag a bar to change when it appears, drag its edges to trim. Video bars show frame thumbnails and the sound's waveform, and trimming them trims the clip itself.
+- Split clips or whole pages at the playhead (**S**), reorder pages by dragging, and drop photos, videos or sounds straight onto the timeline.
+- Snapping to page edges, the playhead and other clips (hold **Alt** to move freely), frame stepping (**,** and **.**), and a typed jump-to-time.
+- Video clips with trim, speed (pitch is kept on export), volume, sound fade in/out, mute, loop and detach audio. A clip that ends before its element holds its last frame. Video can also be used as a page background.
+- 13 page transitions and enter/exit/loop animations for every element. The editor preview plays transitions the same way the exported video does.
 - Audio tracks on multiple lanes with waveforms, trim, move, split, volume and fade in/out.
 - Voice-over recording from your microphone.
 - Full-screen presenter with autoplay.

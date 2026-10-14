@@ -35,8 +35,8 @@ const api = {
   ffmpegFrame: (id: string, frame: Uint8Array) => ipcRenderer.invoke('ffmpeg:frame', id, frame),
   ffmpegFinish: (id: string) => ipcRenderer.invoke('ffmpeg:finish', id),
   ffmpegCancel: (id: string) => ipcRenderer.invoke('ffmpeg:cancel', id),
-  transcode: (input: Uint8Array, ext: string, kind: 'video' | 'audio' | 'mp3'): Promise<Uint8Array> =>
-    ipcRenderer.invoke('ffmpeg:transcode', input, ext, kind),
+  transcode: (input: Uint8Array, ext: string, kind: 'video' | 'audio' | 'mp3' | 'tempo', opts?: { tempo?: number }): Promise<Uint8Array> =>
+    ipcRenderer.invoke('ffmpeg:transcode', input, ext, kind, opts),
 
   onMenu: (cb: (cmd: string) => void) => {
     const h = (_e: unknown, c: string) => cb(c);

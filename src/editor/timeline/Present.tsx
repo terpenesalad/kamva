@@ -7,6 +7,7 @@ import { platform, isDesktop } from '../../lib/platform';
 import { getAsset } from '../../lib/assets';
 import { PageRenderer, preparePage } from '../../lib/render/renderPage';
 import { applyAnimation, videoSourceTime } from '../../lib/render/builder';
+import { videoFadeGain } from '../../lib/timing';
 import { drawTransition } from '../../lib/render/animation';
 import { scheduleAudio } from './playback';
 import { fmtTime } from './common';
@@ -58,7 +59,7 @@ function syncVideos(r: PageRenderer, t: number, playing: boolean, open = false) 
     const active = t >= start && t <= end;
     const target = videoSourceTime(el, Math.min(t, end), dur);
     v.muted = el.muted;
-    v.volume = Math.max(0, Math.min(1, el.volume));
+    v.volume = Math.max(0, Math.min(1, el.volume * videoFadeGain(el, t, dur, pageDur)));
     v.playbackRate = el.speed || 1;
     v.loop = false;
     const clipEnd = (el.trimEnd ?? dur) - 0.04;

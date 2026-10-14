@@ -1,63 +1,45 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowRightLeft, ChevronDown, Copy, Film, Mic, Music, Pause, Play, Plus, Scissors, SkipBack, Square, Trash2, Volume2, VolumeX, X,
-  ZoomIn, ZoomOut, MoveHorizontal,
+  ArrowRightLeft, ChevronDown, Copy, Maximize2, Mic, Music, Pause, Play, Plus, Scissors, SkipBack, SkipForward,
+  Square, StepBack, StepForward, Trash2, Volume2, VolumeX, X, ZoomIn, ZoomOut, MoveHorizontal,
 } from 'lucide-react';
 import type { AudioTrack, Design, Page, TransitionType, VideoElement } from '../../types';
 import { useEditor, pageStartTime, totalDuration } from '../../store/editor';
 import { useUI, usePrefs } from '../../store/ui';
 import { getAsset, getAudioBuffer } from '../../lib/assets';
-import { importDialog } from '../../lib/actions';
+import { importDialog, importFiles, placeAssetOnTimeline, ensureUploadAsset } from '../../lib/actions';
 import { newPage, uid } from '../../lib/defaults';
+import { idb, UploadRecord } from '../../lib/idb';
 import { TRANSITIONS } from '../../lib/render/animation';
-import { ContextMenu, NumberField, Popover, Slider } from '../../components/ui';
-import { usePageThumb, useInView } from './thumbs';
+import { elementSpan, videoMotionEnd } from '../../lib/timing';
+import { ContextMenu, MenuItem, NumberField, Popover, Slider } from '../../components/ui';
+import type { LibraryPayload } from '../dnd';
+import { usePageThumb, usePageStrip, pageMoves, useInView } from './thumbs';
 import { seekTo, trackLength, trackSourceDuration } from './playback';
 import { fmtDur, fmtTime, goToPage, pageMenuItems, pointerDrag, readNum, writeNum } from './common';
 import { ClipLabel, Waveform } from './AudioClip';
 import { RenameInput } from './PagesStrip';
 import { startVoiceOver, stopVoiceOver, useRecorder } from './recorder';
+import { LayerSection, LAYER_H, LAYERS_HEAD_H, SnapFn } from './LayerTracks';
+import { ElementToolbar } from './ElementToolbar';
+import { assetDuration, seekEdge, splitAtPlayhead, stepFrames } from './edits';
 
-const HEAD_W = 84;
+const HEAD_W = 128;
 const RULER_H = 24;
 const PAGE_H = 52;
 const LANE_H = 40;
-const VIDEO_BAR_H = 12;
 const SNAP_PX = 6;
-const PPS_MIN = 8;
-const PPS_MAX = 240;
+const PPS_MIN = 4;
+const PPS_MAX = 400;
 const PPS_KEY = 'kamva.timeline.pps';
+const LAYERS_KEY = 'kamva.timeline.layersCollapsed';
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
-interface VideoBar {
-  el: VideoElement;
-  start: number; // global
-  shown: number; // seconds visible on the timeline
-  srcLen: number; // trimmed source length at playback speed
-  overflow: number; // seconds cut off by the page / element end
-}
-
-function videoBars(d: Design, page: Page | undefined): VideoBar[] {
-  if (!page || page.hidden) return [];
-  const p0 = pageStartTime(d, page.id);
-  const out: VideoBar[] = [];
-  for (const el of page.elements) {
-    if (el.type !== 'video' || !el.assetId) continue;
-    const dur = getAsset(el.assetId)?.meta.duration || d.assets[el.assetId]?.duration || 0;
-    const srcLen = Math.max(0, (el.trimEnd ?? dur) - el.trimStart) / (el.speed || 1);
-    const s = el.timing?.start ?? 0;
-    const e = Math.min(page.duration, el.timing?.end ?? page.duration);
-    const room = Math.max(0, e - s);
-    const shown = el.loop ? room : Math.min(srcLen, room);
-    out.push({ el, start: p0 + s, shown, srcLen, overflow: el.loop ? 0 : Math.max(0, srcLen - room) });
-  }
-  return out;
-}
-
 export function ExpandedTimeline({ design, height }: { design: Design; height: number }) {
   const activeId = useEditor((s) => s.activePageId);
+  const selection = useEditor((s) => s.selection);
   const [pps, setPpsState] = useState(() => clamp(readNum(PPS_KEY, 48), PPS_MIN, PPS_MAX));
   const ppsRef = useRef(pps);
   ppsRef.current = pps;
@@ -67,13 +49,25 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     setPpsState(n);
     writeNum(PPS_KEY, n);
   }, []);
-  const [selClip, setSelClip] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [selClip, setSelClipState] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [trans, setTrans] = useState<{ id: string; anchor: HTMLElement } | null>(null);
+  const [layersCollapsed, setLayersCollapsed] = useState(() => readNum(LAYERS_KEY, 0) === 1);
+  const [pageDrag, setPageDrag] = useState<{ id: string; insert: number } | null>(null);
+  const [dropAt, setDropAt] = useState<{ kind: 'pages'; insert: number } | { kind: 'audio'; lane: number; t: number } | null>(null);
   const [, setDecoded] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // an audio clip and canvas elements are never selected at the same time
+  const setSelClip = useCallback((id: string | null) => {
+    setSelClipState(id);
+    if (id && useEditor.getState().selection.length) useEditor.getState().select([]);
+  }, []);
+  useEffect(() => {
+    if (selection.length) setSelClipState(null);
+  }, [selection]);
 
   // decode audio so clip lengths are exact
   useEffect(() => {
@@ -89,7 +83,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
 
   // drop selection when the clip disappears
   useEffect(() => {
-    if (selClip && !design.audio.some((a) => a.id === selClip)) setSelClip(null);
+    if (selClip && !design.audio.some((a) => a.id === selClip)) setSelClipState(null);
   }, [design.audio, selClip]);
 
   const pages = design.pages;
@@ -112,9 +106,15 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
   const recLane = useRecorder((s) => s.lane);
   const recStart = useRecorder((s) => s.timelineStart);
   const recSecs = useRecorder((s) => Math.ceil(s.elapsed)); // coarse, for the scroll width only
-  const lanes = Math.max(laneCount, recording ? recLane + 1 : 0);
+  const dropLane = dropAt?.kind === 'audio' ? dropAt.lane + 1 : 0;
+  const lanes = Math.max(laneCount, recording ? recLane + 1 : 0, dropLane);
   const activePage = pages.find((p) => p.id === activeId);
-  const vids = useMemo(() => videoBars(design, activePage), [design, activePage]);
+  const activeIndex = pages.findIndex((p) => p.id === activeId);
+  const activeStart = activePage && !activePage.hidden ? pageStartTime(design, activePage.id) : 0;
+  const selEls = useMemo(
+    () => (activePage ? activePage.elements.filter((e) => selection.includes(e.id)) : []),
+    [activePage, selection],
+  );
 
   const [viewW, setViewW] = useState(800);
   useLayoutEffect(() => {
@@ -127,6 +127,13 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
   }, []);
   const span = Math.max(total, audioEnd, recording ? recStart + recSecs : 0);
   const trackW = Math.max(viewW - HEAD_W, span * pps + 160);
+
+  const zoomToFit = useCallback(() => {
+    const el = scrollRef.current;
+    const s = Math.max(1, span);
+    setPps(((el?.clientWidth || 800) - HEAD_W - 48) / s);
+    if (el) el.scrollLeft = 0;
+  }, [span, setPps]);
 
   // ctrl/cmd + wheel zooms around the pointer
   useEffect(() => {
@@ -154,24 +161,37 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     return () => el.removeEventListener('wheel', onWheel);
   }, [setPps]);
 
+  // ------------------------------------------------------------------ snapping
+  /** Every edit point a dragged edge can stick to (global seconds) */
   const snapTargets = useCallback(
-    (excludeId?: string) => {
+    (exclude: Set<string>) => {
+      const d = useEditor.getState().design || design;
       const ts = [...boundaries, useUI.getState().time];
-      for (const t of useEditor.getState().design?.audio || []) {
-        if (t.id === excludeId) continue;
-        ts.push(t.start, t.start + trackLength(design, t));
+      for (const t of d.audio) {
+        if (exclude.has(t.id)) continue;
+        ts.push(t.start, t.start + trackLength(d, t));
+      }
+      const page = d.pages.find((p) => p.id === useEditor.getState().activePageId);
+      if (page && !page.hidden) {
+        const p0 = pageStartTime(d, page.id);
+        for (const e of page.elements) {
+          if (exclude.has(e.id)) continue;
+          const s = elementSpan(e, page.duration);
+          ts.push(p0 + s.start, p0 + s.end);
+          if (e.type === 'video') ts.push(p0 + videoMotionEnd(e, assetDuration(d, e.assetId), page.duration));
+        }
       }
       return ts;
     },
     [boundaries, design],
   );
 
-  const snap = useCallback(
-    (v: number, excludeId?: string, len = 0): number => {
-      const tol = SNAP_PX / pps;
+  const snap: SnapFn = useCallback(
+    (v, exclude, len = 0) => {
+      const tol = SNAP_PX / ppsRef.current;
       let best: number | null = null;
       let bestD = tol;
-      for (const t of snapTargets(excludeId)) {
+      for (const t of snapTargets(exclude)) {
         const d0 = Math.abs(v - t);
         if (d0 < bestD) {
           bestD = d0;
@@ -185,9 +205,12 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
           }
         }
       }
-      return best ?? round1(v);
+      // without a snap, land on whole frames
+      if (best !== null) return best;
+      const fps = design.fps || 30;
+      return Math.round(v * fps) / fps;
     },
-    [pps, snapTargets],
+    [snapTargets, design.fps],
   );
 
   // ------------------------------------------------------------------ clip actions
@@ -195,7 +218,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
 
   const deleteClip = (id: string) => {
     useEditor.getState().deleteAudio(id);
-    setSelClip(null);
+    setSelClipState(null);
   };
   const duplicateClip = (t: AudioTrack) => {
     const len = trackLength(design, t);
@@ -223,26 +246,46 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     });
     setSelClip(second.id);
   };
+  const audioMenu = (t: AudioTrack): MenuItem[] => [
+    { label: 'Split at playhead', icon: <Scissors size={16} />, shortcut: 'S', onClick: () => splitClip(t) },
+    { label: 'Duplicate', icon: <Copy size={16} />, onClick: () => duplicateClip(t) },
+    {
+      label: t.muted ? 'Unmute' : 'Mute',
+      icon: t.muted ? <Volume2 size={16} /> : <VolumeX size={16} />,
+      onClick: () => useEditor.getState().updateAudio(t.id, { muted: !t.muted }),
+    },
+    { sep: true },
+    { label: 'Delete', icon: <Trash2 size={16} />, shortcut: 'Del', danger: true, onClick: () => deleteClip(t.id) },
+  ];
 
-  // ------------------------------------------------------------------ keyboard
+  // ------------------------------------------------------------------ keyboard (when the timeline has focus)
   const onKeyDown = (e: React.KeyboardEvent) => {
     const tgt = e.target as HTMLElement;
-    if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA') return;
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selClip) {
+    if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT') return;
+    const handled = () => {
       e.preventDefault();
       e.stopPropagation();
-      deleteClip(selClip);
+    };
+    if (selTrack && (e.key === 'Delete' || e.key === 'Backspace')) {
+      handled();
+      deleteClip(selTrack.id);
     } else if (e.key === ' ' && tgt.tagName !== 'BUTTON') {
-      e.preventDefault();
-      e.stopPropagation();
+      handled();
       useUI.getState().setPlaying(!useUI.getState().playing);
     } else if (e.key === 'Escape' && selClip) {
       e.stopPropagation();
-      setSelClip(null);
+      setSelClipState(null);
     } else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey) && selTrack) {
-      e.preventDefault();
-      e.stopPropagation();
+      handled();
       duplicateClip(selTrack);
+    } else if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !e.altKey && selTrack) {
+      handled();
+      splitClip(selTrack);
+    } else if (!e.ctrlKey && !e.metaKey && !selection.length && !selTrack && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // with nothing selected, arrows step frames (Shift: one second) while the timeline has focus
+      handled();
+      const fps = design.fps || 30;
+      stepFrames((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? fps : 1));
     }
   };
 
@@ -252,7 +295,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     const track = e.currentTarget as HTMLElement;
     const at = (clientX: number) => {
       const r = track.getBoundingClientRect();
-      return clamp((clientX - r.left) / pps, 0, total);
+      return clamp((clientX - r.left) / ppsRef.current, 0, total);
     };
     seekTo(at(e.clientX));
     pointerDrag(e, (_dx, _dy, ev) => seekTo(at(ev.clientX)), undefined, 'ew-resize');
@@ -288,7 +331,106 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     );
   };
 
-  // ------------------------------------------------------------------ clip drags
+  // ------------------------------------------------------------------ page reorder drag
+  /** Index in design.pages before which a page dropped at global time t lands */
+  const insertIndexAt = (t: number) => {
+    for (const v of visible) if (t < v.start + v.page.duration / 2) return v.index;
+    return pages.length;
+  };
+  const dragPage = (e: React.PointerEvent, page: Page) => {
+    if (e.button !== 0 || renaming) return;
+    goToPage(page.id);
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const from = pages.findIndex((p) => p.id === page.id);
+    let insert = from;
+    let started = false;
+    const tAt = (clientX: number) => (clientX - scroller.getBoundingClientRect().left - HEAD_W + scroller.scrollLeft) / ppsRef.current;
+    pointerDrag(
+      e,
+      (dx, _dy, ev) => {
+        if (!started) {
+          if (Math.abs(dx) < 6) return;
+          started = true;
+        }
+        const sr = scroller.getBoundingClientRect();
+        if (ev.clientX < sr.left + HEAD_W + 24) scroller.scrollLeft -= 12;
+        else if (ev.clientX > sr.right - 24) scroller.scrollLeft += 12;
+        insert = insertIndexAt(tAt(ev.clientX));
+        setPageDrag({ id: page.id, insert });
+      },
+      () => {
+        setPageDrag(null);
+        if (!started) return;
+        const to = insert > from ? insert - 1 : insert;
+        if (to === from) return;
+        useEditor.getState().movePage(page.id, to);
+        // keep the playhead on the page that was moved
+        const d = useEditor.getState().design;
+        if (d && !page.hidden) {
+          useUI.getState().setPlaying(false);
+          seekTo(pageStartTime(d, page.id));
+        }
+      },
+      'grabbing',
+    );
+  };
+
+  // ------------------------------------------------------------------ media dropped onto the timeline
+  const timeAtClient = (clientX: number) => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    return Math.max(0, (clientX - el.getBoundingClientRect().left - HEAD_W + el.scrollLeft) / ppsRef.current);
+  };
+  const acceptsDrop = (e: React.DragEvent) => e.dataTransfer.types.includes('application/x-kamva') || e.dataTransfer.types.includes('Files');
+  const onDragOverPages = (e: React.DragEvent) => {
+    if (!acceptsDrop(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const insert = insertIndexAt(timeAtClient(e.clientX));
+    if (dropAt?.kind !== 'pages' || dropAt.insert !== insert) setDropAt({ kind: 'pages', insert });
+  };
+  const onDragOverLane = (e: React.DragEvent, lane: number) => {
+    if (!acceptsDrop(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const t = snap(timeAtClient(e.clientX), new Set());
+    if (dropAt?.kind !== 'audio' || dropAt.lane !== lane || Math.abs(dropAt.t - t) > 1e-3) setDropAt({ kind: 'audio', lane, t });
+  };
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = dropAt;
+    setDropAt(null);
+    if (!target) return;
+    const ids: string[] = [];
+    const lib = e.dataTransfer.getData('application/x-kamva');
+    if (lib) {
+      const p = JSON.parse(lib) as LibraryPayload;
+      if (p.type === 'upload' || p.type === 'asset' || p.type === 'background') {
+        if (p.type === 'upload' && !getAsset(p.id)) {
+          const rec = await idb.get<UploadRecord>('uploads', p.id);
+          if (rec) await ensureUploadAsset(rec);
+        }
+        ids.push(p.id);
+      }
+    } else if (e.dataTransfer.files.length) {
+      ids.push(...(await importFiles([...e.dataTransfer.files], { place: false })));
+    }
+    const toast = useUI.getState().toast;
+    let placed = 0;
+    ids.forEach((id, i) => {
+      const ok =
+        target.kind === 'pages'
+          ? placeAssetOnTimeline(id, { pageIndex: target.insert + i })
+          : placeAssetOnTimeline(id, { start: target.t, lane: target.lane });
+      if (ok) placed++;
+    });
+    if (ids.length && !placed)
+      toast(target.kind === 'pages' ? 'Drop photos or videos on the pages to add them as new pages.' : 'Drop sounds on an audio track.', 'info');
+  };
+
+  // ------------------------------------------------------------------ audio clip drags
   const dragClip = (e: React.PointerEvent, t: AudioTrack, mode: 'move' | 'left' | 'right') => {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -297,6 +439,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     const len0 = trackLength(design, t);
     const src = trackSourceDuration(design, t);
     const key = `tl-audio-${mode}:${t.id}`;
+    const ex = new Set([t.id]);
     pointerDrag(
       e,
       (dx, dy, ev) => {
@@ -307,14 +450,14 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
         let patch: Partial<AudioTrack> = {};
         if (mode === 'move') {
           let s = t.start + dx / pps;
-          s = free ? Math.round(s * 100) / 100 : snap(s, t.id, len0);
+          s = free ? Math.round(s * 100) / 100 : snap(s, ex, len0);
           s = Math.max(0, s);
           const lane = clamp(t.lane + Math.round(dy / LANE_H), 0, laneCount);
           patch = { start: s, lane };
         } else if (mode === 'left') {
           // move the clip's start edge; the audio stays anchored in time
           let s = t.start + dx / pps;
-          s = free ? Math.round(s * 100) / 100 : snap(s, t.id);
+          s = free ? Math.round(s * 100) / 100 : snap(s, ex);
           const minS = Math.max(0, t.start - t.trimStart); // can't go before the source start
           const maxS = t.start + len0 - 0.1;
           s = clamp(s, minS, maxS);
@@ -323,7 +466,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
         } else {
           if (src <= 0) return;
           let endT = t.start + len0 + dx / pps;
-          endT = free ? Math.round(endT * 100) / 100 : snap(endT, t.id);
+          endT = free ? Math.round(endT * 100) / 100 : snap(endT, ex);
           let te = t.trimStart + (endT - t.start);
           te = clamp(te, t.trimStart + 0.1, src);
           patch = { trimEnd: Math.abs(te - src) < 0.005 ? null : Math.round(te * 1000) / 1000 };
@@ -336,25 +479,6 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     );
   };
 
-  // ------------------------------------------------------------------ helpers
-  const fitPageToVideo = () => {
-    if (!activePage) return;
-    const need = Math.max(
-      0.5,
-      ...activePage.elements
-        .filter((e): e is VideoElement => e.type === 'video' && !!e.assetId)
-        .map((el) => {
-          const dur = getAsset(el.assetId)?.meta.duration || design.assets[el.assetId!]?.duration || 0;
-          return (el.timing?.start ?? 0) + Math.max(0, (el.trimEnd ?? dur) - el.trimStart) / (el.speed || 1);
-        }),
-    );
-    const v = Math.ceil(need * 10 - 1e-6) / 10;
-    if (v !== activePage.duration)
-      useEditor.getState().updatePage(activePage.id, (p) => {
-        p.duration = v;
-      });
-  };
-
   const addPageAtEnd = () => {
     const p = newPage();
     p.duration = usePrefs.getState().pageDurationDefault || 5;
@@ -363,8 +487,17 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
     useEditor.getState().addPage(last?.id, p);
   };
 
-  const videoLaneH = vids.length ? Math.max(40, vids.length * (VIDEO_BAR_H + 4) + 8) : 0;
-  const contentH = RULER_H + PAGE_H + videoLaneH + lanes * LANE_H + 8;
+  const showLayers = !!activePage && !activePage.hidden;
+  const layerRows = showLayers ? (layersCollapsed ? 0 : Math.max(1, activePage!.elements.length)) : 0;
+  const layersH = showLayers ? LAYERS_HEAD_H + layerRows * LAYER_H : 0;
+  const contentH = RULER_H + PAGE_H + layersH + lanes * LANE_H + 8;
+  const focusTimeline = () => rootRef.current?.focus({ preventScroll: true });
+  const pageDropX =
+    dropAt?.kind === 'pages'
+      ? (dropAt.insert >= pages.length ? total : visible.find((v) => v.index >= dropAt.insert)?.start ?? total) * pps
+      : pageDrag
+        ? (pageDrag.insert >= pages.length ? total : visible.find((v) => v.index >= pageDrag.insert)?.start ?? total) * pps
+        : null;
 
   return (
     <div
@@ -377,17 +510,23 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
         const t = e.target as HTMLElement;
         if (!t.closest('input, textarea, select, button')) rootRef.current?.focus({ preventScroll: true });
       }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropAt(null);
+      }}
     >
-      <Transport pps={pps} setPps={setPps} total={total} />
-      {selTrack && (
+      <Transport pps={pps} setPps={setPps} total={total} onFit={zoomToFit} onSplit={() => (selTrack ? splitClip(selTrack) : splitAtPlayhead())} />
+      {selTrack ? (
         <ClipToolbar
           track={selTrack}
           design={design}
-          onClose={() => setSelClip(null)}
+          onClose={() => setSelClipState(null)}
           onDelete={() => deleteClip(selTrack.id)}
           onDuplicate={() => duplicateClip(selTrack)}
           onSplit={() => splitClip(selTrack)}
         />
+      ) : (
+        activePage &&
+        selEls.length > 0 && <ElementToolbar design={design} page={activePage} els={selEls} onClose={() => useEditor.getState().select([])} />
       )}
       <div className="tl-scroll" ref={scrollRef}>
         <div className="tl-content" style={{ width: HEAD_W + trackW, minHeight: contentH }}>
@@ -404,7 +543,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
             <div className="tl-head">
               <span>Pages</span>
             </div>
-            <div className="tl-track" style={{ width: trackW }}>
+            <div className="tl-track tl-pages-track" style={{ width: trackW }} onDragOver={onDragOverPages} onDrop={(e) => void onDrop(e)}>
               {visible.map((v, i) => (
                 <PageBlock
                   key={v.page.id}
@@ -414,6 +553,7 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
                   left={v.start * pps}
                   width={v.page.duration * pps}
                   active={v.page.id === activeId}
+                  dragging={pageDrag?.id === v.page.id}
                   renaming={renaming === v.page.id}
                   onRenameDone={(name) => {
                     setRenaming(null);
@@ -422,38 +562,42 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
                         p.name = name.trim() || undefined;
                       });
                   }}
+                  onPointerDown={dragPage}
                   onResize={dragDuration}
                   onMenu={(e) => {
                     e.preventDefault();
-                    setMenu({ x: e.clientX, y: e.clientY, id: v.page.id });
+                    setMenu({ x: e.clientX, y: e.clientY, items: pageMenuItems(v.page.id, () => setRenaming(v.page.id)) });
                   }}
                   hasNext={i < visible.length - 1}
                   onTransition={(anchor) => setTrans({ id: v.page.id, anchor })}
                 />
               ))}
+              {pageDropX !== null && <div className="tl-insert" style={{ left: pageDropX - 2 }} />}
               <button className="tl-add-page" style={{ left: total * pps + 6 }} onClick={addPageAtEnd} data-tip="Add page" data-tip-side="top" aria-label="Add page">
                 <Plus size={16} />
               </button>
             </div>
           </div>
 
-          {/* active page videos (read-only) */}
-          {vids.length > 0 && (
-            <div className="tl-row" style={{ height: videoLaneH }}>
-              <div className="tl-head tl-head-video">
-                <span>
-                  <Film size={12} /> Video
-                </span>
-                <button className="tl-mini-btn" onClick={fitPageToVideo} title="Set the page duration to the length of its videos">
-                  Fit page
-                </button>
-              </div>
-              <div className="tl-track tl-video-lane" style={{ width: trackW }}>
-                {vids.map((b, i) => (
-                  <VideoBarView key={b.el.id} bar={b} pps={pps} top={Math.max(6, (videoLaneH - vids.length * (VIDEO_BAR_H + 4) + 4) / 2) + i * (VIDEO_BAR_H + 4)} design={design} />
-                ))}
-              </div>
-            </div>
+          {/* layers of the active page */}
+          {showLayers && (
+            <LayerSection
+              design={design}
+              page={activePage!}
+              pageIndex={activeIndex}
+              pageStart={activeStart}
+              pps={pps}
+              trackW={trackW}
+              snap={snap}
+              collapsed={layersCollapsed}
+              onToggle={() => {
+                setLayersCollapsed((c) => {
+                  writeNum(LAYERS_KEY, c ? 0 : 1);
+                  return !c;
+                });
+              }}
+              onFocusTimeline={focusTimeline}
+            />
           )}
 
           {/* audio lanes */}
@@ -464,7 +608,13 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
                   <Music size={12} /> Audio {lanes > 1 ? lane + 1 : ''}
                 </span>
               </div>
-              <div className="tl-track" style={{ width: trackW }} onPointerDown={(e) => e.target === e.currentTarget && setSelClip(null)}>
+              <div
+                className="tl-track"
+                style={{ width: trackW }}
+                onPointerDown={(e) => e.target === e.currentTarget && setSelClipState(null)}
+                onDragOver={(e) => onDragOverLane(e, lane)}
+                onDrop={(e) => void onDrop(e)}
+              >
                 {design.audio
                   .filter((t) => t.lane === lane)
                   .map((t) => (
@@ -478,11 +628,13 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
                       onMenu={(e) => {
                         e.preventDefault();
                         setSelClip(t.id);
+                        setMenu({ x: e.clientX, y: e.clientY, items: audioMenu(t) });
                       }}
                     />
                   ))}
                 {recording && recLane === lane && <RecClip pps={pps} />}
-                {!design.audio.length && !recording && lane === 0 && (
+                {dropAt?.kind === 'audio' && dropAt.lane === lane && <div className="tl-insert" style={{ left: dropAt.t * pps - 2 }} />}
+                {!design.audio.length && !recording && lane === 0 && !dropAt && (
                   <div className="tl-empty-lane" style={{ left: 8 }}>
                     Add audio or record a voice-over to hear it with your pages.
                   </div>
@@ -490,13 +642,20 @@ export function ExpandedTimeline({ design, height }: { design: Design; height: n
               </div>
             </div>
           ))}
+          {/* an extra lane appears while dragging a sound below the last one */}
+          {dropAt?.kind !== 'audio' && (
+            <div className="tl-row tl-lane tl-lane-new" style={{ height: 8 }} onDragOver={(e) => onDragOverLane(e, lanes)} onDrop={(e) => void onDrop(e)}>
+              <div className="tl-head" />
+              <div className="tl-track" style={{ width: trackW }} />
+            </div>
+          )}
 
           {total < span && <div className="tl-overrun" style={{ left: HEAD_W + total * pps, top: RULER_H, width: (span - total) * pps + 160 }} />}
           <Playhead pps={pps} scrollRef={scrollRef} />
         </div>
       </div>
 
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={pageMenuItems(menu.id, () => setRenaming(menu.id))} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
       {trans && <TransitionPopover pageId={trans.id} anchor={trans.anchor} onClose={() => setTrans(null)} />}
     </div>
   );
@@ -514,12 +673,18 @@ function RecClip({ pps }: { pps: number }) {
 
 // ---------------------------------------------------------------------------
 
-function Transport({ pps, setPps, total }: { pps: number; setPps: (v: number) => void; total: number }) {
+function Transport({ pps, setPps, total, onFit, onSplit }: { pps: number; setPps: (v: number) => void; total: number; onFit: () => void; onSplit: () => void }) {
   const playing = useUI((s) => s.playing);
   const recording = useRecorder((s) => s.recording);
   const fill = ((Math.log(pps) - Math.log(PPS_MIN)) / (Math.log(PPS_MAX) - Math.log(PPS_MIN))) * 100;
   return (
     <div className="tl-transport">
+      <button className="icon-btn sm" onClick={() => seekEdge('start')} aria-label="Jump to start" data-tip="Jump to start (Home)">
+        <SkipBack size={15} />
+      </button>
+      <button className="icon-btn sm" onClick={() => stepFrames(-1)} aria-label="Previous frame" data-tip="Previous frame (,)">
+        <StepBack size={15} />
+      </button>
       <button
         className="icon-btn sm tl-play"
         onClick={() => useUI.getState().setPlaying(!playing)}
@@ -529,11 +694,17 @@ function Transport({ pps, setPps, total }: { pps: number; setPps: (v: number) =>
       >
         {playing ? <Pause size={16} /> : <Play size={16} />}
       </button>
-      <button className="icon-btn sm" onClick={() => seekTo(0)} aria-label="Jump to start" data-tip="Jump to start">
-        <SkipBack size={15} />
+      <button className="icon-btn sm" onClick={() => stepFrames(1)} aria-label="Next frame" data-tip="Next frame (.)">
+        <StepForward size={15} />
+      </button>
+      <button className="icon-btn sm" onClick={() => seekEdge('end')} aria-label="Jump to end" data-tip="Jump to end (End)">
+        <SkipForward size={15} />
       </button>
       <TimeReadout total={total} />
       <div className="vdivider" />
+      <button className="btn ghost sm" onClick={onSplit} title="Split the selected clip, or the page, at the playhead (S)">
+        <Scissors size={14} /> Split
+      </button>
       <button className="btn ghost sm" onClick={() => void importDialog('audio')}>
         <Music size={14} /> Add audio
       </button>
@@ -571,6 +742,9 @@ function Transport({ pps, setPps, total }: { pps: number; setPps: (v: number) =>
         <button className="icon-btn sm" onClick={() => setPps(pps * 1.4)} aria-label="Zoom in" data-tip="Zoom in">
           <ZoomIn size={14} />
         </button>
+        <button className="icon-btn sm" onClick={onFit} aria-label="Fit timeline" data-tip="Fit the whole video">
+          <Maximize2 size={14} />
+        </button>
       </div>
       <button className="icon-btn sm" onClick={() => useUI.getState().setTimelineOpen(false)} aria-label="Hide timeline" data-tip="Hide timeline">
         <ChevronDown size={16} />
@@ -584,26 +758,51 @@ function RecTime() {
   return <span className="tl-rec-time">{fmtTime(elapsed)}</span>;
 }
 
+/** Playhead time; click to type a time to jump to */
 function TimeReadout({ total }: { total: number }) {
-  const time = useUI((s) => Math.round(s.time * 10));
+  const fps = useEditor((s) => s.design?.fps || 30);
+  const frame = useUI((s) => Math.round(s.time * fps));
+  const [editing, setEditing] = useState(false);
+  const t = frame / fps;
+  if (editing)
+    return (
+      <span className="tl-time tl-time-edit">
+        <NumberField
+          value={Math.round(t * 100) / 100}
+          min={0}
+          max={total}
+          step={1 / fps}
+          decimals={2}
+          unit="s"
+          onChange={(v) => {
+            useUI.getState().setPlaying(false);
+            seekTo(v);
+          }}
+        />
+        <button className="icon-btn sm" onClick={() => setEditing(false)} aria-label="Done">
+          <X size={12} />
+        </button>
+      </span>
+    );
   return (
-    <span className="tl-time">
-      <b>{fmtTime(time / 10)}</b> / {fmtTime(total)}
-    </span>
+    <button className="tl-time" onClick={() => setEditing(true)} title="Click to type a time">
+      <b>{fmtTime(t)}</b>
+      <span className="tl-frame">f{frame % fps}</span> / {fmtTime(total)}
+    </button>
   );
 }
 
 // ---------------------------------------------------------------------------
 
 function niceStep(pps: number): { major: number; minor: number } {
-  const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
-  const major = steps.find((s) => s * pps >= 56) ?? 600;
-  const minor = major <= 1 ? major / 5 : major <= 2 ? 0.5 : major <= 10 ? 1 : major / 5;
+  const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  const major = steps.find((s) => s * pps >= 56) ?? 1200;
+  const minor = major <= 0.25 ? major / 5 : major <= 1 ? major / 5 : major <= 2 ? 0.5 : major <= 10 ? 1 : major / 5;
   return { major, minor };
 }
 
 function rulerLabel(t: number): string {
-  if (t < 60) return Number.isInteger(t) ? `${t}s` : `${t.toFixed(1)}s`;
+  if (t < 60) return Number.isInteger(t) ? `${t}s` : `${+t.toFixed(2)}s`;
   const m = Math.floor(t / 60);
   const s = Math.round(t % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
@@ -675,33 +874,46 @@ const PageBlock = memo(function PageBlock(props: {
   left: number;
   width: number;
   active: boolean;
+  dragging: boolean;
   renaming: boolean;
   hasNext: boolean;
   onRenameDone: (name: string | null) => void;
+  onPointerDown: (e: React.PointerEvent, page: Page) => void;
   onResize: (e: React.PointerEvent, page: Page) => void;
   onMenu: (e: React.MouseEvent) => void;
   onTransition: (anchor: HTMLElement) => void;
 }) {
   const { design, page, index, left, width, active, renaming, hasNext } = props;
   const [ref, inView] = useInView<HTMLDivElement>();
-  const thumb = usePageThumb(design, page, inView);
-  const tileW = Math.max(16, (PAGE_H - 8) * (design.width / design.height));
+  const tileW = Math.max(16, (PAGE_H - 10) * (design.width / design.height));
+  // pages that change over time get a film strip of frames across the page
+  const moves = pageMoves(page);
+  const frames = moves ? Math.max(1, Math.min(12, Math.round(width / tileW))) : 0;
+  const thumb = usePageThumb(design, page, inView && !moves);
+  const strip = usePageStrip(design, page, inView && moves, frames);
   const tr = page.transition;
+  const hasVideo = page.elements.some((e) => e.type === 'video' && !!(e as VideoElement).assetId);
   return (
     <>
       <div
         ref={ref}
-        className={'tl-page' + (active ? ' active' : '')}
+        className={'tl-page' + (active ? ' active' : '') + (props.dragging ? ' dragging' : '')}
         style={{ left, width: Math.max(4, width - 2) }}
-        onPointerDown={(e) => {
-          if (e.button === 0) goToPage(page.id);
-        }}
+        onPointerDown={(e) => props.onPointerDown(e, page)}
         onContextMenu={props.onMenu}
-        title={`${page.name || `Page ${index + 1}`} · ${fmtDur(page.duration)}`}
+        title={`${page.name || `Page ${index + 1}`} · ${fmtDur(page.duration)}${hasVideo ? ' · has video' : ''} — drag to reorder`}
       >
         <div
           className="tl-film"
-          style={thumb ? { backgroundImage: `url(${thumb})`, backgroundSize: `${tileW}px 100%` } : undefined}
+          style={
+            moves
+              ? strip
+                ? { backgroundImage: `url(${strip})`, backgroundSize: '100% 100%', backgroundRepeat: 'no-repeat' }
+                : undefined
+              : thumb
+                ? { backgroundImage: `url(${thumb})`, backgroundSize: `${tileW}px 100%` }
+                : undefined
+          }
         />
         <div className="tl-page-label">
           <span className="tl-page-num">{index + 1}</span>
@@ -761,45 +973,15 @@ function TransitionPopover({ pageId, anchor, onClose }: { pageId: string; anchor
             }
             value={page.transition.duration}
             min={0.2}
-            max={2}
+            max={Math.max(0.2, Math.min(2, page.duration))}
             step={0.1}
             suffix="s"
             onChange={(v) => set({ duration: round1(v) }, 'tl-trans-dur:' + pageId)}
           />
         )}
-        <p className="tl-pop-note">Plays when this page hands over to the next one.</p>
+        <p className="tl-pop-note">Plays at the end of this page as it hands over to the next one.</p>
       </div>
     </Popover>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-function VideoBarView({ bar, pps, top, design }: { bar: VideoBar; pps: number; top: number; design: Design }) {
-  const { el } = bar;
-  const name = el.name || getAsset(el.assetId)?.meta.name || design.assets[el.assetId!]?.name || 'Video';
-  const dur = getAsset(el.assetId)?.meta.duration || design.assets[el.assetId!]?.duration || 0;
-  const trimmed = el.trimStart > 0.01 || (el.trimEnd !== null && el.trimEnd < dur - 0.01);
-  const info = `${name} · ${fmtDur(bar.srcLen)}${trimmed ? ` · trimmed ${el.trimStart.toFixed(1)}–${(el.trimEnd ?? dur).toFixed(1)}s` : ''}${el.loop ? ' · loops' : ''}${
-    bar.overflow > 0.05 ? ` · ${fmtDur(bar.overflow)} cut off by the page end` : ''
-  }`;
-  return (
-    <>
-      <div
-        className="tl-vbar"
-        style={{ left: bar.start * pps, width: Math.max(3, bar.shown * pps), top, height: VIDEO_BAR_H }}
-        title={info}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          useEditor.getState().select([el.id]);
-        }}
-      >
-        <span>{bar.shown * pps > 70 ? info : ''}</span>
-      </div>
-      {bar.overflow > 0.05 && (
-        <div className="tl-vbar-over" style={{ left: (bar.start + bar.shown) * pps, width: bar.overflow * pps, top, height: VIDEO_BAR_H }} title={info} />
-      )}
-    </>
   );
 }
 
@@ -877,9 +1059,6 @@ function ClipToolbar(props: { track: AudioTrack; design: Design; onClose: () => 
         <NumberField value={track.fadeOut} min={0} max={Math.max(0, len)} step={0.1} decimals={1} unit="s" onChange={(v) => up({ fadeOut: round1(v) }, 'fo')} />
       </div>
       <div className="vdivider" />
-      <button className="btn ghost sm" onClick={props.onSplit} title="Split at playhead">
-        <Scissors size={14} /> Split
-      </button>
       <button className="icon-btn sm" onClick={props.onDuplicate} aria-label="Duplicate clip" data-tip="Duplicate">
         <Copy size={14} />
       </button>
@@ -896,3 +1075,4 @@ function ClipToolbar(props: { track: AudioTrack; design: Design; onClose: () => 
     </div>
   );
 }
+

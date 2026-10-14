@@ -440,20 +440,39 @@ ipcMain.handle('ffmpeg:cancel', async (_e, id: string) => {
 // Convert arbitrary audio/video into something Chromium can play (used on import
 // for formats like .mov/.mkv/.avi/.flac that the browser engine can't decode) and
 // encode WAV to MP3 for audio export.
-ipcMain.handle('ffmpeg:transcode', async (_e, input: Uint8Array, inExt: string, kind: 'video' | 'audio' | 'mp3') => {
+ipcMain.handle(
+  'ffmpeg:transcode',
+  async (_e, input: Uint8Array, inExt: string, kind: 'video' | 'audio' | 'mp3' | 'tempo', opts?: { tempo?: number }) => {
   const bin = ffmpegPath();
   if (!bin) throw new Error('ffmpeg is not available in this build.');
   const id = Math.random().toString(36).slice(2);
   const inPath = path.join(os.tmpdir(), `kamva-in-${id}.${inExt.replace(/[^a-z0-9]/gi, '')}`);
-  const outExt = kind === 'video' ? 'mp4' : kind === 'mp3' ? 'mp3' : 'm4a';
+  const outExt = kind === 'video' ? 'mp4' : kind === 'mp3' ? 'mp3' : kind === 'tempo' ? 'wav' : 'm4a';
   const outPath = path.join(os.tmpdir(), `kamva-out-${id}.${outExt}`);
   await fsp.writeFile(inPath, toBuffer(input));
+  // speed change that keeps the pitch (atempo takes 0.5..2 per stage)
+  const tempoChain = (t: number) => {
+    const parts: number[] = [];
+    let r = Math.max(0.01, t);
+    while (r > 2) {
+      parts.push(2);
+      r /= 2;
+    }
+    while (r < 0.5) {
+      parts.push(0.5);
+      r /= 0.5;
+    }
+    parts.push(r);
+    return parts.map((x) => `atempo=${x.toFixed(6)}`).join(',');
+  };
   const args =
     kind === 'video'
       ? ['-y', '-i', inPath, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outPath]
       : kind === 'mp3'
         ? ['-y', '-i', inPath, '-c:a', 'libmp3lame', '-b:a', '256k', outPath]
-        : ['-y', '-i', inPath, '-vn', '-c:a', 'aac', '-b:a', '256k', outPath];
+        : kind === 'tempo'
+          ? ['-y', '-i', inPath, '-vn', '-af', tempoChain(opts?.tempo || 1), '-c:a', 'pcm_s16le', outPath]
+          : ['-y', '-i', inPath, '-vn', '-c:a', 'aac', '-b:a', '256k', outPath];
   const code: number = await new Promise((resolve) => {
     const p = spawn(bin, args, { windowsHide: true });
     p.on('close', (c) => resolve(c ?? 1));
@@ -466,7 +485,8 @@ ipcMain.handle('ffmpeg:transcode', async (_e, input: Uint8Array, inExt: string, 
     await fsp.rm(inPath, { force: true });
     await fsp.rm(outPath, { force: true });
   }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // App lifecycle

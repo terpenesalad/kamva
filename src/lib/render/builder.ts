@@ -532,14 +532,31 @@ function buildImage(el: ImageElement, g: Konva.Group, ctx: BuildCtx) {
   if (el.borderWidth > 0 && !masked) clip.clipFunc(() => [new Path2D(path)] as any);
 }
 
-/** Source time for a video element at page time t */
-export function videoSourceTime(el: VideoElement, t: number, assetDuration: number): number {
-  const start = el.timing?.start ?? 0;
-  const local = Math.max(0, t - start) * (el.speed || 1);
-  const end = el.trimEnd ?? assetDuration;
-  const len = Math.max(0.05, end - el.trimStart);
-  const off = el.loop ? local % len : Math.min(local, len - 0.04);
-  return el.trimStart + off;
+export { videoSourceTime } from '../timing';
+
+const HELD = new WeakMap<HTMLVideoElement, HTMLCanvasElement>();
+/** The frame captured by holdFrame() before the video last seeked */
+export function heldFrame(v: HTMLVideoElement): HTMLCanvasElement | undefined {
+  return HELD.get(v);
+}
+/** Remember the current frame so it can stay on screen while the video seeks. */
+export function holdFrame(v: HTMLVideoElement) {
+  if (v.readyState < 2 || !v.videoWidth) return;
+  const k = Math.min(1, 1280 / v.videoWidth);
+  const w = Math.max(1, Math.round(v.videoWidth * k));
+  const h = Math.max(1, Math.round(v.videoHeight * k));
+  let c = HELD.get(v);
+  if (!c) {
+    c = document.createElement('canvas');
+    HELD.set(v, c);
+  }
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  try {
+    c.getContext('2d')!.drawImage(v, 0, 0, w, h);
+  } catch {
+    /* frame not available */
+  }
 }
 
 function buildVideo(el: VideoElement, g: Konva.Group, ctx: BuildCtx) {
@@ -571,8 +588,13 @@ function buildVideo(el: VideoElement, g: Konva.Group, ctx: BuildCtx) {
       sceneFunc: (kctx) => {
         const n = (kctx as any)._context as CanvasRenderingContext2D;
         if (v.readyState < 2 || !v.videoWidth) {
-          n.fillStyle = '#111';
-          n.fillRect(0, 0, w, h);
+          // mid-seek: keep showing the previous frame rather than flashing black
+          const held = heldFrame(v);
+          if (held) drawMedia(n, held, held.width, held.height, el.crop, a, w, h);
+          else {
+            n.fillStyle = '#111';
+            n.fillRect(0, 0, w, h);
+          }
           return;
         }
         drawMedia(n, v, v.videoWidth, v.videoHeight, el.crop, a, w, h);
@@ -688,6 +710,9 @@ export function buildElement(el: DesignElement, ctx: BuildCtx): Konva.Group {
   if (el.blendMode && el.blendMode !== 'source-over') {
     inner.find('Shape').forEach((n) => n.setAttr('globalCompositeOperation', el.blendMode));
   }
+  // playback, seeking and the exporters look the <video> up on the element's node
+  const video = inner.getAttr('video');
+  if (video) outer.setAttr('video', video);
   return outer;
 }
 

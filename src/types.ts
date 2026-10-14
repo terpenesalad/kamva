@@ -237,6 +237,9 @@ export interface VideoElement extends BaseElement, MediaCommon {
   muted: boolean;
   loop: boolean;
   speed: number;
+  /** Sound fade in/out, in seconds of the visible clip */
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 export interface SvgElement extends BaseElement {

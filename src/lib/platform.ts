@@ -28,7 +28,7 @@ interface Bridge {
   ffmpegFrame(id: string, frame: Uint8Array): Promise<boolean>;
   ffmpegFinish(id: string): Promise<boolean>;
   ffmpegCancel(id: string): Promise<void>;
-  transcode(input: Uint8Array, ext: string, kind: 'video' | 'audio' | 'mp3'): Promise<Uint8Array>;
+  transcode(input: Uint8Array, ext: string, kind: 'video' | 'audio' | 'mp3' | 'tempo', opts?: { tempo?: number }): Promise<Uint8Array>;
   onMenu(cb: (cmd: string) => void): () => void;
   onOpenFile(cb: (p: string) => void): () => void;
   onRequestClose(cb: () => void): () => void;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Crop, ImageUp, Undo2, Wand, RotateCcw, Image as ImageIcon, Clock } from 'lucide-react';
+import { Crop, ImageUp, Undo2, Wand, RotateCcw, Image as ImageIcon, Clock, AudioLines } from 'lucide-react';
 import type { ImageAdjust, ImageElement, VideoElement } from '../../types';
 import { useEditor, useActivePage } from '../../store/editor';
 import { useUI } from '../../store/ui';
@@ -15,6 +15,7 @@ import { platform, FILTERS as FILE_FILTERS } from '../../lib/platform';
 import { fillPrimaryColor } from '../../lib/color';
 import { setAsBackground } from '../elementActions';
 import { DualRange, Field, S, ShapeGridPicker, SubHead, patchEls, ed } from './fields';
+import { detachAudio } from '../timeline/edits';
 
 // ---------------------------------------------------------------------------
 // Filter previews
@@ -362,11 +363,38 @@ export function VideoSection({ el }: { el: VideoElement }) {
         </div>
       </Field>
       <Slider label="Volume" value={Math.round(el.volume * 100)} min={0} max={100} suffix="%" onChange={(v) => patchEls(ids, { volume: v / 100 }, 'vol')} />
+      <Field label="Sound fade">
+      <div className="grid2">
+        <NumberField
+          label="In"
+          value={el.fadeIn || 0}
+          decimals={1}
+          step={0.1}
+          min={0}
+          max={Math.max(0, clipLen)}
+          unit="s"
+          onChange={(v) => patchEls(ids, { fadeIn: r1(v) } as Partial<VideoElement>, 'fade-in')}
+        />
+        <NumberField
+          label="Out"
+          value={el.fadeOut || 0}
+          decimals={1}
+          step={0.1}
+          min={0}
+          max={Math.max(0, clipLen)}
+          unit="s"
+          onChange={(v) => patchEls(ids, { fadeOut: r1(v) } as Partial<VideoElement>, 'fade-out')}
+        />
+      </div>
+      </Field>
       <Slider label="Speed" value={el.speed} min={0.25} max={4} step={0.05} suffix="×" onChange={(v) => patchEls(ids, { speed: v }, 'speed')} />
       <div className="grid2">
         <Toggle label={<span className="field-label">Mute</span>} value={el.muted} onChange={(v) => patchEls(ids, { muted: v })} />
         <Toggle label={<span className="field-label">Loop</span>} value={el.loop} onChange={(v) => patchEls(ids, { loop: v })} />
       </div>
+      <button type="button" className="btn block" disabled={el.muted} onClick={() => detachAudio(el.id)} title="Move the sound onto its own audio track">
+        <AudioLines size={15} /> Detach audio
+      </button>
       {page && clipLen > 0 && (
         <button
           type="button"

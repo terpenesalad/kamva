@@ -609,14 +609,23 @@ const SHORTCUTS: { title: string; items: Sc[] }[] = [
   },
   {
     title: 'Pages and playback',
-    items: [S('Previous or next page (nothing selected)', ['←', '→']), S('Play or pause', ['K']), S('Present', [SHIFT, 'P'], [MOD, ALT, 'P'])],
+    items: [
+      S('Previous or next page (nothing selected)', ['←', '→']),
+      S('Play or pause (Space also works in the timeline)', ['K'], ['Space']),
+      S('Previous or next frame', [','], ['.']),
+      S('Back or forward one second', [SHIFT, ','], [SHIFT, '.']),
+      S('Jump to start or end', ['Home'], ['End']),
+      S('Split the selection (or the page) at the playhead', ['S']),
+      S('Split the page at the playhead', [SHIFT, 'S']),
+      S('Present', [SHIFT, 'P'], [MOD, ALT, 'P']),
+    ],
   },
   {
     title: 'Mouse',
     items: [
       S('Add to selection', [SHIFT, 'Click']),
       S('Move along one axis', [SHIFT, 'Drag']),
-      S('Move without snapping', [ALT, 'Drag']),
+      S('Move without snapping (also on the timeline)', [ALT, 'Drag']),
       S('Zoom', [MOD, 'Scroll']),
       S('Scroll sideways', [SHIFT, 'Scroll']),
       S('Pan', ['Middle-drag']),

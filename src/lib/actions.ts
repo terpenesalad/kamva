@@ -413,8 +413,9 @@ export async function placeAsset(id: string, at?: { x: number; y: number }) {
 }
 
 /** Add files (from dialog, drag & drop or paste). */
-export async function importFiles(files: (OpenedFile | File)[], opts: { place?: boolean; at?: { x: number; y: number } } = {}) {
+export async function importFiles(files: (OpenedFile | File)[], opts: { place?: boolean; at?: { x: number; y: number } } = {}): Promise<string[]> {
   const place = opts.place !== false;
+  const added: string[] = [];
   for (const f of files) {
     const name = f.name;
     const isFile = f instanceof File;
@@ -452,6 +453,7 @@ export async function importFiles(files: (OpenedFile | File)[], opts: { place?: 
       const meta = await addAsset(blob, assetName);
       kind = meta.kind;
       registerInDesign(meta.id);
+      added.push(meta.id);
       void addToUploads(meta.id);
       if (place && useEditor.getState().design && kind !== 'font') await placeAsset(meta.id, opts.at);
       if (kind === 'font') toast(`Font “${meta.fontFamily}” added`, 'success');
@@ -459,6 +461,47 @@ export async function importFiles(files: (OpenedFile | File)[], opts: { place?: 
       toast(`Couldn't import ${name}: ${errorMessage(e)}`, 'error', 6000);
     }
   }
+  return added;
+}
+
+/**
+ * Put an asset on the video timeline: a photo or video becomes a new page
+ * (inserted at `pageIndex`, filled edge to edge, as long as the video); a
+ * sound becomes an audio clip at `start` on `lane`.
+ */
+export function placeAssetOnTimeline(id: string, where: { pageIndex: number } | { start: number; lane: number }) {
+  const a = getAsset(id);
+  const st = useEditor.getState();
+  const d = st.design;
+  if (!a || !d) return false;
+  registerInDesign(id);
+  const { kind, width = d.width, height = d.height, duration = 0 } = a.meta;
+  if ('pageIndex' in where) {
+    if (kind !== 'image' && kind !== 'video' && kind !== 'svg') return false;
+    const p = newPage();
+    p.duration = kind === 'video' && duration > 0 ? Math.round(duration * 10) / 10 : usePrefs.getState().pageDurationDefault || 5;
+    const crop = coverCrop(width, height, d.width, d.height);
+    const el = kind === 'video' ? makeVideo(id, 0, 0, d.width, d.height, { crop, name: a.meta.name }) : makeImage(id, 0, 0, d.width, d.height, { crop, name: a.meta.name });
+    p.elements.push(el);
+    st.update((dd) => {
+      dd.pages.splice(Math.max(0, Math.min(where.pageIndex, dd.pages.length)), 0, p);
+    });
+    useEditor.setState({ activePageId: p.id, selection: [el.id] });
+    return true;
+  }
+  if (kind !== 'audio' && kind !== 'video') return false;
+  const start = Math.max(0, Math.round(where.start * 100) / 100);
+  // don't stack on top of another clip: use the first free lane from the one it was dropped on
+  const len = duration > 0 ? duration : 1;
+  let lane = Math.max(0, where.lane);
+  const busy = (l: number) =>
+    d.audio.some((t) => {
+      const tl = Math.max(0, (t.trimEnd ?? getAsset(t.assetId)?.meta.duration ?? 0) - t.trimStart);
+      return t.lane === l && t.start < start + len - 1e-3 && t.start + tl > start + 1e-3;
+    });
+  while (busy(lane) && lane < 64) lane++;
+  st.addAudio(makeAudioTrack(id, a.meta.name, start, lane));
+  return true;
 }
 
 export async function importDialog(kind: 'all' | 'images' | 'video' | 'audio' | 'fonts' = 'all', place = true) {

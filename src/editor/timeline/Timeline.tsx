@@ -8,7 +8,7 @@ import './timeline.css';
 
 const H_KEY = 'kamva.timeline.height';
 const H_MIN = 170;
-const H_DEFAULT = 248;
+const H_DEFAULT = 300;
 
 export function Timeline() {
   const design = useEditor((s) => s.design);

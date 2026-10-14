@@ -3,7 +3,10 @@ import { create } from 'zustand';
 import type { DesignElement, Page, ImageElement, VideoElement, TextElement, DrawElement } from '../../types';
 import { useEditor, findElement } from '../../store/editor';
 import { useUI, usePrefs } from '../../store/ui';
-import { applyAnimation, buildBackground, buildElement, measureText, videoSourceTime, BuildCtx } from '../../lib/render/builder';
+import { applyAnimation, buildBackground, buildElement, measureText, videoSourceTime, holdFrame, BuildCtx } from '../../lib/render/builder';
+import { activeAt, videoFadeGain, videoMotionEnd } from '../../lib/timing';
+import { drawTransition } from '../../lib/render/animation';
+import { PageRenderer, preparePage } from '../../lib/render/renderPage';
 import { onAssetsChanged, getAsset, getImage, allVideoEls } from '../../lib/assets';
 import { fitCrop } from '../../lib/render/media';
 import { snapBox, unionBox, intersects, Box, SnapLine } from './snapping';
@@ -83,6 +86,10 @@ export class CanvasController {
   dragStart: Map<string, { x: number; y: number }> | null = null;
   drawing: { line: Konva.Line; pts: number[] } | null = null;
   lastPlayback: { t: number; playing: boolean } = { t: 0, playing: false };
+  /** canvas laid over the page while a page transition plays */
+  transOverlay: HTMLCanvasElement | null = null;
+  /** first frame of the next page, for the transition (keyed by page object + zoom) */
+  transNext: { page: Page; zoom: number; canvas: HTMLCanvasElement | null } | null = null;
   raf = 0;
   destroyed = false;
 
@@ -155,7 +162,7 @@ export class CanvasController {
           this.updateSelection();
           this.sync();
           this.setPlayback(s.time, s.playing);
-        } else if (s.time !== prev.time) this.setPlayback(s.time, s.playing);
+        } else if (s.time !== prev.time || s.timelineOpen !== prev.timelineOpen) this.setPlayback(s.time, s.playing);
       }),
       usePrefs.subscribe((s, prev) => {
         if (s.accent !== prev.accent) this.applyAccent();
@@ -945,13 +952,17 @@ export class CanvasController {
       if (!p.hidden) start += p.duration;
     }
     const local = Math.max(0, Math.min(page.duration, globalT - start));
-    const inPage = globalT >= start - 0.001 && globalT <= start + page.duration + 0.001;
+    const inPage = !page.hidden && globalT >= start - 0.001 && globalT <= start + page.duration + 0.001;
     const animate = playing && inPage;
+    // While editing with the timeline open, elements that aren't on screen at
+    // the playhead are ghosted, so the canvas shows the frame being edited.
+    const ghost = !playing && inPage && useUI.getState().timelineOpen;
     for (const el of page.elements) {
       const n = this.nodes.get(el.id);
       if (!n) continue;
       applyAnimation(n, el, animate ? local : null, page.duration, d.width, d.height);
-      if (el.type === 'video') this.syncVideo(n, el, local, playing && inPage);
+      if (ghost && !el.hidden && !activeAt(el, local, page.duration)) n.opacity(n.opacity() * 0.18);
+      if (el.type === 'video') this.syncVideo(n, el, local, playing && inPage, page.duration);
     }
     const bgv = this.bgNode?.getAttr('video') as HTMLVideoElement | undefined;
     if (bgv) {
@@ -969,30 +980,106 @@ export class CanvasController {
       }
     }
     this.pageLayer.batchDraw();
+    this.updateTransition(page, local, playing && inPage);
   }
 
-  syncVideo(n: Konva.Group, el: VideoElement, local: number, playing: boolean) {
+  /**
+   * Keep an element's <video> in step with page time `local`: same frame, speed,
+   * trim and sound (volume × fades) as the exporters use. Once a non-looping
+   * clip reaches its end the last frame is held, like in the exported video.
+   */
+  syncVideo(n: Konva.Group, el: VideoElement, local: number, playing: boolean, pageDur: number) {
     const v = n.getAttr('video') as HTMLVideoElement | undefined;
     if (!v || !el.assetId) return;
     const dur = getAsset(el.assetId)?.meta.duration || v.duration || 0;
     const target = videoSourceTime(el, local, dur);
-    const start = el.timing?.start ?? 0;
-    const end = el.timing?.end ?? Infinity;
-    const active = local >= start && local <= end;
+    const active = activeAt(el, local, pageDur);
+    const moving = active && (el.loop || local < videoMotionEnd(el, dur, pageDur) - 0.02);
     v.muted = el.muted;
-    v.volume = Math.max(0, Math.min(1, el.volume));
+    v.volume = Math.max(0, Math.min(1, el.volume * videoFadeGain(el, local, dur, pageDur)));
     v.playbackRate = el.speed || 1;
     v.loop = false;
-    if (playing && active) {
-      if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target;
+    if (playing && moving) {
+      if (Math.abs(v.currentTime - target) > 0.3) {
+        holdFrame(v);
+        v.currentTime = target;
+      }
       if (v.paused) void v.play().catch(() => undefined);
     } else {
       if (!v.paused) v.pause();
       if (Math.abs(v.currentTime - target) > 0.04 && v.readyState >= 1) {
+        holdFrame(v);
         v.currentTime = target;
         v.addEventListener('seeked', () => this.pageLayer.batchDraw(), { once: true });
       }
     }
+  }
+
+  /**
+   * Page transitions while playing in the editor, drawn exactly like the
+   * exporters do: the outgoing page (live) blends into the first frame of the
+   * next page over the last `transition.duration` seconds.
+   */
+  updateTransition(page: Page, local: number, playing: boolean) {
+    const d = this.editor.design;
+    const hide = () => {
+      if (this.transOverlay) this.transOverlay.style.display = 'none';
+    };
+    if (!d || !playing) {
+      hide();
+      if (!playing) this.transNext = null;
+      return;
+    }
+    const vis = d.pages.filter((p) => !p.hidden);
+    const next = vis[vis.findIndex((p) => p.id === page.id) + 1];
+    const type = next ? page.transition?.type ?? 'none' : 'none';
+    const trDur = type !== 'none' ? Math.min(Math.max(0, page.transition.duration || 0), page.duration) : 0;
+    if (!next || trDur <= 0) {
+      hide();
+      return;
+    }
+    const z = this.stage.scaleX();
+    // render the next page's first frame a little ahead of time
+    if (local > page.duration - trDur - 1.5 && (!this.transNext || this.transNext.page !== next || this.transNext.zoom !== z)) {
+      const slot = { page: next, zoom: z, canvas: null as HTMLCanvasElement | null };
+      this.transNext = slot;
+      const dpr = window.devicePixelRatio || 1;
+      void (async () => {
+        await preparePage(d, next, 'trans:');
+        if (this.transNext !== slot || this.destroyed) return;
+        const r = new PageRenderer(d, next, { scale: z * dpr, mode: 'play', videoKey: 'trans:' });
+        try {
+          slot.canvas = await r.frame(0, z * dpr);
+        } finally {
+          r.destroy();
+        }
+      })();
+    }
+    if (local <= page.duration - trDur || !this.transNext?.canvas) {
+      hide();
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(d.width * z);
+    const h = Math.round(d.height * z);
+    let ov = this.transOverlay;
+    if (!ov) {
+      ov = document.createElement('canvas');
+      ov.className = 'canvas-transition';
+      Object.assign(ov.style, { position: 'absolute', pointerEvents: 'none', zIndex: '2' });
+      this.container.appendChild(ov);
+      this.transOverlay = ov;
+    }
+    const cw = Math.max(1, Math.round(w * dpr));
+    const ch = Math.max(1, Math.round(h * dpr));
+    if (ov.width !== cw) ov.width = cw;
+    if (ov.height !== ch) ov.height = ch;
+    Object.assign(ov.style, { display: 'block', left: `${this.stage.x()}px`, top: `${this.stage.y()}px`, width: `${w}px`, height: `${h}px` });
+    this.pageLayer.draw();
+    const from = this.pageLayer.toCanvas({ x: this.stage.x(), y: this.stage.y(), width: w, height: h, pixelRatio: dpr });
+    const p = Math.max(0, Math.min(1, (local - (page.duration - trDur)) / trDur));
+    const ctx = ov.getContext('2d')!;
+    drawTransition(ctx, type, p, from, this.transNext.canvas, cw, ch);
   }
 
   /** Called every animation frame while playing */
@@ -1201,6 +1288,7 @@ export class CanvasController {
     window.removeEventListener('mouseup', this.onMarqueeUp);
     cancelAnimationFrame(this.raf);
     for (const [k, v] of allVideoEls()) if (k.startsWith('edit:')) v.pause();
+    this.transOverlay?.remove();
     this.stage.destroy();
   }
 }

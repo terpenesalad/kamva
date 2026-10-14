@@ -229,11 +229,37 @@
   background: var(--sunken);
 }
 .tl-time {
-  margin: 0 8px 0 4px;
+  margin: 0 6px 0 4px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  font: inherit;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+  cursor: text;
+}
+button.tl-time:hover {
+  border-color: var(--line);
+}
+.tl-frame {
+  margin: 0 2px 0 4px;
+  font-size: 10px;
+  color: var(--faint);
+  display: inline-block;
+  min-width: 22px;
+}
+.tl-time-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: default;
+}
+.tl-time-edit .num-input {
+  width: 92px;
+  height: 26px;
 }
 .tl-time b {
   color: var(--text);
@@ -369,7 +395,7 @@
   position: sticky;
   left: 0;
   z-index: 10;
-  width: 84px;
+  width: 128px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -918,4 +944,273 @@
   height: 20px;
   margin: 0 4px;
   background: rgba(255, 255, 255, 0.16);
+}
+
+/* ---------------------------------------------------------------- layers */
+.tl-layers-head .tl-head {
+  padding-left: 4px;
+}
+.tl-section-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tl-section-btn:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+.tl-count {
+  font-weight: 500;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.tl-layers-head .tl-track {
+  background: color-mix(in srgb, var(--sunken) 30%, transparent);
+}
+.tl-page-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-left: 1px dashed var(--accent-line);
+  border-right: 1px dashed var(--accent-line);
+}
+.tl-layers-head .tl-page-zone span {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tl-layer {
+  border-bottom-color: color-mix(in srgb, var(--line) 60%, transparent);
+}
+.tl-layer-head {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding-right: 4px;
+  cursor: pointer;
+}
+.tl-layer-head:hover {
+  color: var(--text);
+}
+.tl-layer.selected .tl-layer-head {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.tl-layer-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+.tl-layer-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-layer-name svg {
+  flex-shrink: 0;
+}
+.tl-layer-lock {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+.tl-eye {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--faint);
+  opacity: 0;
+  cursor: pointer;
+}
+.tl-layer-head:hover .tl-eye,
+.tl-eye.off {
+  opacity: 1;
+}
+.tl-eye:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+
+/* element bars */
+.tl-lbar {
+  --bar: #7c8597;
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bar) 20%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bar) 55%, transparent);
+  cursor: grab;
+  color: var(--text);
+}
+.tl-lbar.t-text {
+  --bar: #3b82f6;
+}
+.tl-lbar.t-shape,
+.tl-lbar.t-line,
+.tl-lbar.t-draw {
+  --bar: #f59e0b;
+}
+.tl-lbar.t-image {
+  --bar: #10b981;
+}
+.tl-lbar.t-svg {
+  --bar: #ec4899;
+}
+.tl-lbar.t-video {
+  --bar: var(--accent);
+  background: #14131a;
+}
+.tl-lbar.selected {
+  box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 1px var(--accent);
+  z-index: 2;
+}
+.tl-lbar.t-video.selected {
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px var(--accent);
+}
+.tl-lbar.is-hidden {
+  opacity: 0.45;
+}
+.tl-lbar.locked {
+  cursor: default;
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--bar) 10%, transparent) 6px 9px);
+}
+.tl-vstrip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.tl-lbar-label {
+  position: absolute;
+  left: 6px;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tl-lbar-label svg {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--bar) 80%, var(--text));
+}
+.tl-lbar-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-lbar.t-video .tl-lbar-label {
+  top: 2px;
+  transform: none;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.6);
+}
+.tl-lbar.t-video .tl-lbar-label svg {
+  color: #fff;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8));
+}
+.tl-badge {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--marigold);
+  color: #1b1a22;
+  font-size: 9px;
+  text-shadow: none;
+  line-height: 13px;
+}
+.tl-lbar-tail {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.55) 0 4px, rgba(0, 0, 0, 0.25) 4px 8px);
+  border-left: 1px solid rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+}
+.tl-anim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.tl-anim.in {
+  left: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bar) 45%, transparent), transparent);
+}
+.tl-anim.out {
+  right: 0;
+  background: linear-gradient(270deg, color-mix(in srgb, var(--bar) 45%, transparent), transparent);
+}
+.tl-lbar .tl-clip-edge::after {
+  background: var(--bar);
+}
+.tl-lbar.t-video .tl-clip-edge::after {
+  background: #fff;
+}
+.tl-lbar:hover .tl-clip-edge::after,
+.tl-lbar.selected .tl-clip-edge::after {
+  opacity: 1;
+}
+
+/* drop / reorder markers */
+.tl-insert {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  z-index: 5;
+  pointer-events: none;
+}
+.tl-page.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+.tl-lane-new {
+  border-bottom: none;
+}
+.tl-lane-new .tl-head,
+.tl-lane-new .tl-track {
+  background: transparent;
+}
+.tl-speed {
+  width: auto;
+  height: 26px;
+  font-size: 12px;
+  padding-left: 8px;
+  background-position: calc(100% - 13px) 11px, calc(100% - 9px) 11px;
 }

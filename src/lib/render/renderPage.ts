@@ -60,8 +60,11 @@ export class PageRenderer {
     this.nodes = buildPageInto(this.layer, this.ctx);
   }
 
-  /** Seek videos for time t (seconds into the page). */
-  async seek(t: number) {
+  /**
+   * Seek videos for time t (seconds into the page). With t = null (a still of
+   * the whole design) every video shows its own first frame.
+   */
+  async seek(t: number | null) {
     const jobs: Promise<void>[] = [];
     for (const el of this.ctx.page.elements) {
       if (el.type !== 'video' || !el.assetId) continue;
@@ -69,11 +72,11 @@ export class PageRenderer {
       const v = g?.getAttr('video') as HTMLVideoElement | undefined;
       if (!v) continue;
       const dur = getAsset(el.assetId)?.meta.duration || v.duration || 0;
-      jobs.push(seekVideo(v, videoSourceTime(el as VideoElement, t, dur)));
+      jobs.push(seekVideo(v, videoSourceTime(el as VideoElement, t ?? el.timing?.start ?? 0, dur)));
     }
     const bg = this.layer.findOne('.background') as Konva.Group | undefined;
     const bv = bg?.getAttr('video') as HTMLVideoElement | undefined;
-    if (bv && bv.duration) jobs.push(seekVideo(bv, t % bv.duration));
+    if (bv && bv.duration) jobs.push(seekVideo(bv, (t ?? 0) % bv.duration));
     await Promise.all(jobs);
   }
 
@@ -87,7 +90,7 @@ export class PageRenderer {
 
   /** Render a frame to a canvas at `pixelRatio` */
   async frame(t: number | null, pixelRatio = this.ctx.scale): Promise<HTMLCanvasElement> {
-    if (t !== null) await this.seek(t);
+    await this.seek(t);
     this.applyTime(t);
     return this.stage.toCanvas({ pixelRatio });
   }
@@ -105,11 +108,38 @@ export async function renderPageCanvas(
   await preparePage(design, page, 'export:');
   const r = new PageRenderer(design, page, { scale: opts.scale ?? 1, transparent: opts.transparent, videoKey: 'export:' });
   try {
-    // videos: show their first frame (trim start) for still exports
-    return await r.frame(opts.time ?? (page.elements.some((e) => e.type === 'video') || page.background.assetId ? 0 : null), opts.scale ?? 1);
+    // a still shows every element, each video at its first frame
+    return await r.frame(opts.time ?? null, opts.scale ?? 1);
   } finally {
     r.destroy();
   }
+}
+
+/**
+ * A strip of `frames` thumbnails sampled evenly across the page's duration
+ * (what the page looks like over time), each `tileH` px tall.
+ */
+export async function pageStrip(design: Design, page: Page, frames: number, tileH: number): Promise<HTMLCanvasElement> {
+  const scale = tileH / design.height;
+  const tw = Math.max(1, Math.round(design.width * scale));
+  const th = Math.max(1, Math.round(tileH));
+  const out = document.createElement('canvas');
+  out.width = tw * frames;
+  out.height = th;
+  const ctx = out.getContext('2d')!;
+  await preparePage(design, page, 'strip:');
+  const r = new PageRenderer(design, page, { scale, videoKey: 'strip:' });
+  try {
+    for (let i = 0; i < frames; i++) {
+      const t = ((i + 0.5) / frames) * page.duration;
+      const c = await r.frame(t, scale);
+      ctx.drawImage(c, i * tw, 0, tw, th);
+      c.width = c.height = 0;
+    }
+  } finally {
+    r.destroy();
+  }
+  return out;
 }
 
 export async function pageThumbnail(design: Design, page: Page, maxSize = 320): Promise<HTMLCanvasElement> {

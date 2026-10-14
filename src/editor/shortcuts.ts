@@ -9,6 +9,8 @@ import {
   align, deleteSelection, groupSelection, nudge, selectAll, toggleLock, ungroupSelection, addText, addShapeCentered,
 } from './elementActions';
 
+import { seekEdge, splitAtPlayhead, splitPageAtPlayhead, stepFrames } from './timeline/edits';
+
 function typing(): boolean {
   const a = document.activeElement as HTMLElement | null;
   return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable);
@@ -250,6 +252,21 @@ export function useShortcuts() {
         }
         case ' ':
           return;
+        case 'Home':
+          e.preventDefault();
+          seekEdge('start');
+          return;
+        case 'End':
+          e.preventDefault();
+          seekEdge('end');
+          return;
+      }
+      // frame stepping: , and . (Shift: one second)
+      if (e.code === 'Comma' || e.code === 'Period') {
+        e.preventDefault();
+        const fps = st.design?.fps || 30;
+        stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps : 1));
+        return;
       }
       if (e.altKey) return;
       switch (k) {
@@ -281,6 +298,12 @@ export function useShortcuts() {
           break;
         case 'k':
           useUI.getState().setPlaying(!useUI.getState().playing);
+          break;
+        case 's':
+          // split the selection (or the page) at the playhead; Shift+S always splits the page
+          if (e.shiftKey) {
+            if (!splitPageAtPlayhead()) useUI.getState().toast('Move the playhead inside the page (not at its edge) to split it.', 'info');
+          } else splitAtPlayhead();
           break;
         case 'p':
           if (e.shiftKey) useUI.getState().setPresenting(true);

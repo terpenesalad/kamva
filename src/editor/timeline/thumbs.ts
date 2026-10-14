@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Design, Page } from '../../types';
-import { pageThumbnail } from '../../lib/render/renderPage';
+import { pageStrip, pageThumbnail } from '../../lib/render/renderPage';
 import { getAsset, onAssetsChanged } from '../../lib/assets';
 
 // ---------------------------------------------------------------------------
@@ -97,6 +97,79 @@ export function usePageThumb(design: Design, page: Page, visible: boolean): stri
     };
   }, [page, visible, w, h, assetTick]);
 
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// Film strips for the timeline's page track: several frames across the page's
+// duration, so timed elements and videos show up where they play.
+// ---------------------------------------------------------------------------
+const STRIP_H = 44;
+const strips = new WeakMap<Page, Map<number, Entry>>();
+
+function renderStrip(design: Design, page: Page, frames: number, alive: () => boolean): Promise<Entry | null> {
+  return enqueue(async () => {
+    if (!alive()) return null;
+    const hit = strips.get(page)?.get(frames);
+    if (hit && hit.w === design.width && hit.h === design.height && !(hit.missing && !pageMissingAssets(page))) return hit;
+    const missing = pageMissingAssets(page);
+    const c = await pageStrip(design, page, frames, STRIP_H * 2);
+    const entry: Entry = { url: c.toDataURL('image/jpeg', 0.82), w: design.width, h: design.height, missing };
+    if (!strips.has(page)) strips.set(page, new Map());
+    strips.get(page)!.set(frames, entry);
+    await new Promise((r) => setTimeout(r, 0));
+    return entry;
+  });
+}
+
+/** Does the page change over time (timed elements, animation or video)? */
+export function pageMoves(page: Page): boolean {
+  if (page.background.assetId && getAsset(page.background.assetId)?.meta.kind === 'video') return true;
+  return page.elements.some((e) => e.type === 'video' || !!e.timing || (!!e.animation && (e.animation.enter !== 'none' || e.animation.exit !== 'none' || e.animation.loop !== 'none')));
+}
+
+/** Data URL of a film strip of `frames` frames across the page, rendered when `visible`. */
+export function usePageStrip(design: Design, page: Page, visible: boolean, frames: number): string | null {
+  const designRef = useRef(design);
+  designRef.current = design;
+  const [url, setUrl] = useState<string | null>(() => strips.get(page)?.get(frames)?.url ?? null);
+  const [assetTick, setAssetTick] = useState(0);
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  useEffect(() => {
+    const off = onAssetsChanged(() => {
+      const e = strips.get(page)?.get(frames);
+      if (e?.missing) setAssetTick((n) => n + 1);
+    });
+    return () => {
+      off();
+    };
+  }, [page, frames]);
+  const w = design.width;
+  const h = design.height;
+  useEffect(() => {
+    const e = strips.get(page)?.get(frames);
+    if (e && e.w === w && e.h === h && !(e.missing && !pageMissingAssets(page))) {
+      if (e.url !== urlRef.current) setUrl(e.url);
+      return;
+    }
+    if (!visible || frames < 1) return;
+    let alive = true;
+    const timer = setTimeout(
+      () => {
+        void renderStrip(designRef.current, page, frames, () => alive)
+          .then((r) => {
+            if (alive && r) setUrl(r.url);
+          })
+          .catch(() => undefined);
+      },
+      urlRef.current ? 500 : 0,
+    );
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [page, visible, frames, w, h, assetTick]);
   return url;
 }
 
