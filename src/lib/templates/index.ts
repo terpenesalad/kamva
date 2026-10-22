@@ -3,6 +3,7 @@ import { SOCIAL_TEMPLATES } from './social';
 import { PRESENTATION_TEMPLATES } from './presentations';
 import { PRINT_TEMPLATES } from './print';
 import { BRAND_TEMPLATES } from './brand';
+import { STEAM_TEMPLATES } from './steam';
 
 /** Display order of template categories */
 export const TEMPLATE_CATEGORIES: string[] = [
@@ -21,6 +22,7 @@ export const TEMPLATE_CATEGORIES: string[] = [
   'Certificate',
   'Menu',
   'Quote',
+  'Steam',
 ];
 
 const order = (c: string) => {
@@ -28,7 +30,7 @@ const order = (c: string) => {
   return i < 0 ? TEMPLATE_CATEGORIES.length : i;
 };
 
-export const BUILT_IN_TEMPLATES: Template[] = [...SOCIAL_TEMPLATES, ...PRESENTATION_TEMPLATES, ...PRINT_TEMPLATES, ...BRAND_TEMPLATES].sort(
+export const BUILT_IN_TEMPLATES: Template[] = [...SOCIAL_TEMPLATES, ...PRESENTATION_TEMPLATES, ...PRINT_TEMPLATES, ...BRAND_TEMPLATES, ...STEAM_TEMPLATES].sort(
   (a, b) => order(a.category) - order(b.category),
 );
 

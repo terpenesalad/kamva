@@ -12,7 +12,7 @@ export interface DesignPreset {
   description?: string;
 }
 
-export const PRESET_CATEGORIES = ['Social', 'Video', 'Presentation', 'Print', 'Other'] as const;
+export const PRESET_CATEGORIES = ['Social', 'Video', 'Presentation', 'Print', 'Steam', 'Other'] as const;
 
 const px = (id: string, name: string, category: string, width: number, height: number, description?: string): DesignPreset => ({
   id,
@@ -69,6 +69,22 @@ export const DESIGN_PRESETS: DesignPreset[] = [
   print('postcard', 'Postcard', 6, 4, 'in', 'Landscape postcard'),
   print('invitation', 'Invitation', 5, 7, 'in', 'Party and wedding cards'),
   print('certificate', 'Certificate', 11, 8.5, 'in', 'Landscape letter'),
+
+  // Steam store, library and community assets (Steamworks sizes, August 2024 revision)
+  px('steam-header-capsule', 'Steam header capsule', 'Steam', 920, 430, 'Store header · logo + artwork · required'),
+  px('steam-small-capsule', 'Steam small capsule', 'Steam', 462, 174, 'Store lists and search · logo + artwork · required'),
+  px('steam-main-capsule', 'Steam main capsule', 'Steam', 1232, 706, 'Front page carousel · logo + artwork · required'),
+  px('steam-vertical-capsule', 'Steam vertical capsule', 'Steam', 748, 896, 'Sales and seasonal pages · logo + artwork · required'),
+  px('steam-screenshot', 'Steam screenshot', 'Steam', 1920, 1080, 'Gameplay screenshot · 16:9, 1920×1080 minimum · required'),
+  px('steam-page-background', 'Steam page background', 'Steam', 1438, 810, 'Store page backdrop · subtle, not too bright · optional'),
+  px('steam-library-capsule', 'Steam library capsule', 'Steam', 600, 900, 'Library grid cover · logo + artwork · required'),
+  px('steam-library-header', 'Steam library header', 'Steam', 920, 430, 'Library header capsule · logo + artwork · required'),
+  px('steam-library-hero', 'Steam library hero', 'Steam', 3840, 1240, 'Library page banner · artwork only, no logo · PNG · required'),
+  px('steam-library-logo', 'Steam library logo', 'Steam', 1280, 720, 'Logo over the hero · transparent PNG, logo only · required'),
+  px('steam-event-cover', 'Steam event cover', 'Steam', 800, 450, 'Event and announcement cover · artwork + copy · required'),
+  px('steam-event-header', 'Steam event header', 'Steam', 1920, 622, 'Event page header · artwork + logo · optional'),
+  px('steam-shortcut-icon', 'Steam shortcut icon', 'Steam', 256, 256, 'Desktop shortcut · PNG or ICO · required'),
+  px('steam-app-icon', 'Steam app icon', 'Steam', 184, 184, 'Community / app icon · JPG · required'),
 
   // Other
   px('logo', 'Logo', 'Other', 500, 500, 'Square mark'),

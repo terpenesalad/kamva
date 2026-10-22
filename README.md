@@ -16,8 +16,8 @@ The builds aren't code-signed yet. Windows SmartScreen may show "Windows protect
 ## What it does
 
 ### Design
-- Multi-page designs at any size, in px, in, mm or cm. There are 32 presets for social posts, video, presentations and print.
-- 32 built-in templates, plus your own saved templates.
+- Multi-page designs at any size, in px, in, mm or cm. There are 46 presets for social posts, video, presentations, print and Steam.
+- 46 built-in templates (including a full Steam store and library kit), plus your own saved templates.
 - Text with 40 bundled fonts, uploaded fonts (TTF/OTF/WOFF) and installed system fonts. Effects include outline, hollow, highlight, glow, lift, echo, neon and splice, plus curved text, lists, letter spacing and line height.
 - 35 shapes, lines with arrowheads, about 1,900 icons, emoji stickers, charts (bar, column, line, area, pie, donut, progress), tables and QR codes.
 - Photo frames: mask any photo to a circle, arch, blob, star, heart and more. Drop a photo onto a frame to fill it.
