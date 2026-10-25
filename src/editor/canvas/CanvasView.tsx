@@ -57,6 +57,17 @@ export function CanvasView() {
     };
   }, []);
 
+  // clear the drop highlight when a drag ends anywhere (dropped elsewhere, Esc, left the window)
+  useEffect(() => {
+    const clear = () => setDropHint(false);
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+    };
+  }, []);
+
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDropHint(false);
@@ -97,7 +108,8 @@ export function CanvasView() {
           if (!dropHint) setDropHint(true);
         }}
         onDragLeave={(e) => {
-          if (e.currentTarget === e.target) setDropHint(false);
+          // the stage's own <canvas> elements are children, so check where the pointer went
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropHint(false);
         }}
         onDrop={onDrop}
         onContextMenu={(e) => e.preventDefault()}

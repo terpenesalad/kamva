@@ -4,7 +4,11 @@
 .editor {
   display: grid;
   grid-template-rows: var(--top) 1fr auto;
+  /* minmax(0, …) so a wide timeline (e.g. a long song) scrolls inside its own
+     area instead of stretching the window and pushing the canvas off-screen */
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
+  min-width: 0;
 }
 
 /* ---------------------------------------------------------------- top bar */
